@@ -25,7 +25,9 @@ class DirectN8nClient:
         self.base_url = f"{self.instance_url}/api/v1"
         self.headers = {
             "X-N8N-API-KEY": api_key,
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            # Required for localtunnel (loca.lt) to bypass the interstitial page
+            "Bypass-Tunnel-Reminder": "true"
         }
     
     async def _request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
@@ -100,10 +102,8 @@ class DirectN8nClient:
         else:
             workflow_data["connections"] = current.get("connections", {})
         
-        if "active" in updates and updates["active"] is not None:
-            workflow_data["active"] = updates["active"]
-        else:
-            workflow_data["active"] = current.get("active", False)
+        # NOTE: Do NOT include "active" — n8n API treats it as read-only in PUT.
+        # Use the /activate or /deactivate endpoint to toggle workflow state.
         
         # Preserve other fields
         if "settings" in current:

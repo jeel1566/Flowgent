@@ -40,6 +40,7 @@ router = APIRouter(prefix="/api", tags=["api"])
 def get_n8n_client_from_headers(instance_url: str = None, api_key: str = None):
     """Get n8n client from request headers or fall back to MCP."""
     if instance_url and api_key:
+        logger.info(f"Creating direct n8n client for: {instance_url}")
         return create_n8n_client(instance_url, api_key)
     return None
 
@@ -107,9 +108,14 @@ async def list_workflows(
         ]
     except Exception as e:
         logger.error(f"Failed to list workflows: {e}", exc_info=True)
-        if "401" in str(e) or "403" in str(e):
+        error_str = str(e)
+        if "401" in error_str or "403" in error_str:
             raise HTTPException(status_code=401, detail="Authentication failed with n8n. Check your API key.")
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve workflows: {str(e)}")
+        # On timeout or connection errors, return empty list so dashboard doesn't crash
+        if "ReadTimeout" in error_str or "ConnectTimeout" in error_str or "ConnectError" in error_str or "503" in error_str:
+            logger.warning(f"n8n instance unreachable (timeout). Returning empty workflow list.")
+            return []
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve workflows: {error_str}")
 
 
 @router.get("/workflows/{workflow_id}", response_model=Workflow)
@@ -261,66 +267,83 @@ async def get_node_info(node_type: str):
             logger.info(f"Using cached info for: {node_type}")
             return NODE_INFO_CACHE[node_type]
 
-        logger.info(f"Getting fast node info for: {node_type}")
-        
+        logger.info(f"Getting node info for: {node_type}")
+
         # Use MCP client directly for speed (not slow chat)
         client = get_mcp_client()
         info = await client.get_node_info(node_type)
-        
-        if info:
+
+        if info and isinstance(info, dict):
             logger.info(f"Successfully retrieved MCP node info for {node_type}")
-            
-            # Parse and format the response for tooltip
-            if isinstance(info, dict):
-                # Extract basic info
-                display_name = info.get("displayName", info.get("name", node_type.split(".")[-1]))
-                description = info.get("description", info.get("text", info.get("summary", "")))
-                
-                # Generate "how it works" and "what it does" from available data
-                how_it_works = ""
-                what_it_does = ""
-                
-                # Try to extract meaningful content from various fields
-                if "properties" in info:
-                    # Use parameter descriptions to understand functionality
-                    params = info["properties"]
-                    if params:
-                        how_it_works = f"Operates with {len(params)} parameters including {', '.join(list(params.keys())[:3])}"
-                
-                if "inputs" in info:
-                    inputs = info["inputs"]
-                    if isinstance(inputs, list) and inputs:
-                        how_it_works += f", processes {len(inputs)} input types"
-                
-                # Default descriptions if we can't extract meaningful content
-                if not how_it_works:
-                    how_it_works = f"Processes data according to its configuration and parameters"
-                
-                if not what_it_does:
-                    what_it_does = f"Performs {display_name.lower()} operations within automation workflows"
-                
-                # Format response for tooltip
-                result = {
-                    "name": display_name,
-                    "description": description[:100] if description else f"Node for {display_name.lower()} operations",
-                    "howItWorks": how_it_works[:200] if how_it_works else f"Configurable {display_name.lower()} node",
-                    "whatItDoes": what_it_does[:200] if what_it_does else f"Executes {display_name.lower()} tasks in workflows",
-                    "nodeType": node_type,
-                    "icon": info.get("icon", "")
-                }
-            else:
-                # Fallback for non-dict responses
-                result = {
-                    "name": node_type.split(".")[-1].replace("-", " ").title(),
-                    "description": str(info)[:100],
-                    "howItWorks": f"Performs {node_type.split('.')[-1].replace('-', ' ')} operations",
-                    "whatItDoes": f"Executes {node_type.split('.')[-1].replace('-', ' ')} tasks in workflows",
-                    "nodeType": node_type,
-                    "icon": ""
-                }
+
+            # Extract display name from structured data
+            display_name = (
+                info.get("displayName")
+                or info.get("name")
+                or node_type.split(".")[-1].replace("-", " ").title()
+            )
+
+            # Extract description from structured data
+            description = (
+                info.get("description")
+                or info.get("subtitle")
+                or ""
+            )
+
+            # Build 'howItWorks' from resources/operations structure
+            how_it_works = ""
+            if "resources" in info and isinstance(info["resources"], list):
+                resource_names = [r.get("name", r.get("displayName", "")) for r in info["resources"] if isinstance(r, dict)]
+                if resource_names:
+                    how_it_works = f"Operates on resources: {', '.join(resource_names[:5])}"
+
+            if "operations" in info and isinstance(info["operations"], list):
+                op_names = [o.get("name", o.get("displayName", "")) for o in info["operations"] if isinstance(o, dict)]
+                if op_names:
+                    ops_str = f"Supports operations: {', '.join(op_names[:5])}"
+                    how_it_works = f"{how_it_works}. {ops_str}" if how_it_works else ops_str
+
+            if "properties" in info and isinstance(info["properties"], (dict, list)):
+                props = info["properties"]
+                if isinstance(props, dict):
+                    prop_names = list(props.keys())[:5]
+                elif isinstance(props, list):
+                    prop_names = [p.get("displayName", p.get("name", "")) for p in props if isinstance(p, dict)][:5]
+                else:
+                    prop_names = []
+                if prop_names and not how_it_works:
+                    how_it_works = f"Configurable with: {', '.join(prop_names)}"
+
+            if not how_it_works:
+                how_it_works = f"Configurable {display_name} node for workflow automation"
+
+            # Build 'whatItDoes' from docs markdown or description
+            what_it_does = ""
+            docs_markdown = info.get("docsMarkdown", "")
+            if docs_markdown:
+                # Extract the first meaningful paragraph from docs
+                for line in docs_markdown.split("\n"):
+                    line = line.strip()
+                    if line and not line.startswith("#") and not line.startswith("|") and len(line) > 20:
+                        what_it_does = line[:200]
+                        break
+
+            if not what_it_does and description:
+                what_it_does = description[:200]
+
+            if not what_it_does:
+                what_it_does = f"{display_name} enables automation of related tasks within n8n workflows"
+
+            result = {
+                "name": display_name,
+                "description": description[:200] if description else f"{display_name} node for n8n workflow automation",
+                "howItWorks": how_it_works[:300],
+                "whatItDoes": what_it_does[:300],
+                "nodeType": node_type,
+                "icon": info.get("icon", "")
+            }
         else:
             logger.warning(f"No MCP info for {node_type}, using fallback")
-            # Fast fallback without slow AI call
             result = {
                 "name": node_type.split(".")[-1].replace("-", " ").title(),
                 "description": f"Node for {node_type.split('.')[-1].replace('-', ' ').lower()} operations",
@@ -329,15 +352,14 @@ async def get_node_info(node_type: str):
                 "nodeType": node_type,
                 "icon": ""
             }
-        
+
         # Cache the result for future fast access
         NODE_INFO_CACHE[node_type] = result
         logger.info(f"Cached node info for: {node_type}")
         return result
-            
+
     except Exception as e:
         logger.error(f"Failed to get node info for {node_type}: {e}", exc_info=True)
-        # Return fast fallback instead of error
         return {
             "name": node_type.split(".")[-1].replace("-", " ").title(),
             "description": f"Node for {node_type.split('.')[-1].replace('-', ' ').lower()} operations",
@@ -374,6 +396,11 @@ async def list_executions(
         return executions
     except Exception as e:
         logger.error(f"Failed to list executions: {e}", exc_info=True)
-        if "401" in str(e) or "403" in str(e):
+        error_str = str(e)
+        if "401" in error_str or "403" in error_str:
             raise HTTPException(status_code=401, detail="Authentication failed with n8n. Check your API key.")
+        # On timeout or connection errors, return empty list so dashboard doesn't crash
+        if "ReadTimeout" in error_str or "ConnectTimeout" in error_str or "ConnectError" in error_str:
+            logger.warning(f"n8n instance unreachable (timeout). Returning empty execution list.")
+            return []
         raise HTTPException(status_code=500, detail=f"Failed to retrieve executions: {str(e)}")

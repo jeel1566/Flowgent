@@ -1,0 +1,201 @@
+{
+  "version": "2.8",
+  "children": [
+    {
+      "type": "frame",
+      "id": "bi8Au",
+      "x": 0,
+      "y": 0,
+      "name": "Frame",
+      "clip": true,
+      "width": 800,
+      "height": 600,
+      "fill": "#FFFFFF",
+      "layout": "none",
+      "children": [
+        {
+          "type": "rectangle",
+          "id": "y5tS5",
+          "x": 0,
+          "y": 0,
+          "reusable": true,
+          "fill": "#f6efefff",
+          "width": 800,
+          "height": 600
+        },
+        {
+          "type": "rectangle",
+          "id": "WM3WX",
+          "x": 64,
+          "y": 40,
+          "fill": "#CCCCCC",
+          "width": 672,
+          "height": 31
+        },
+        {
+          "type": "text",
+          "id": "FfCd6",
+          "x": 87,
+          "y": 46,
+          "fill": "#000000",
+          "content": "Navbar",
+          "fontFamily": "Inter",
+          "fontSize": 16,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "rectangle",
+          "id": "cDQla",
+          "x": 69,
+          "y": 121,
+          "fill": "#3b2525ff",
+          "width": 178,
+          "height": 161
+        },
+        {
+          "type": "text",
+          "id": "HHG1C",
+          "x": 80,
+          "y": 156,
+          "fill": "#ffffff",
+          "content": "home components ",
+          "fontFamily": "Inter",
+          "fontSize": 16,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "rectangle",
+          "id": "fsIQC",
+          "x": 270,
+          "y": 120,
+          "fill": "#c23232ff",
+          "width": 180,
+          "height": 162
+        },
+        {
+          "type": "rectangle",
+          "id": "K41G0",
+          "x": 71,
+          "y": 544,
+          "fill": "#CCCCCC",
+          "width": 669,
+          "height": 34
+        },
+        {
+          "type": "text",
+          "id": "cyNWV",
+          "x": 122,
+          "y": 553,
+          "fill": "#000000",
+          "content": "footer\n",
+          "fontFamily": "Inter",
+          "fontSize": 16,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "AQAtI",
+          "x": 313,
+          "y": 173,
+          "fill": "#ffffff",
+          "content": "contact \ncomponents",
+          "fontFamily": "Inter",
+          "fontSize": 16,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "rectangle",
+          "id": "cp0HT",
+          "x": 471,
+          "y": 121,
+          "fill": "#b54242ff",
+          "width": 184,
+          "height": 163
+        },
+        {
+          "type": "text",
+          "id": "RElFj",
+          "x": 492,
+          "y": 166,
+          "fill": "#ffffff",
+          "content": "about components",
+          "fontFamily": "Inter",
+          "fontSize": 16,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "thsJi",
+          "x": 96,
+          "y": 395,
+          "fill": "#000000",
+          "content": "min 15 components and max 30 components",
+          "fontFamily": "Inter",
+          "fontSize": 16,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "Iw8fA",
+          "x": 127,
+          "y": 434,
+          "fill": "#000000",
+          "content": "must include:-\n API\n ",
+          "fontFamily": "Inter",
+          "fontSize": 16,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "T3mix",
+          "x": 164,
+          "y": 453,
+          "fill": "#000000",
+          "textGrowth": "fixed-width-height",
+          "width": 212,
+          "height": 69,
+          "content": ",login or registration or form\nsticky footer\n",
+          "fontFamily": "Inter",
+          "fontSize": 16,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "Ko1jS",
+          "x": 386,
+          "y": 463,
+          "fill": "#000000",
+          "content": ",routing,",
+          "fontFamily": "Inter",
+          "fontSize": 16,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "XdnAT",
+      "x": 864,
+      "y": -1,
+      "name": "Frame 1",
+      "clip": true,
+      "width": 557,
+      "height": 787,
+      "fill": "#FFFFFF",
+      "layout": "none",
+      "children": [
+        {
+          "type": "text",
+          "id": "UMvLi",
+          "x": 37,
+          "y": 47,
+          "fill": "#000000",
+          "content": "Home components\n",
+          "fontFamily": "Inter",
+          "fontSize": 16,
+          "fontWeight": "normal"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+The user is sending "test_kimi_thinking" which appears to be a test message. Let me interpret this as a request to help them understand how I think and plan workflows in n8n.
+
+I'll explain my workflow protocol in action, demonstrating the process I follow when building workflows. This will be educational and show the user how I approach automation tasks systematically.
+
+I should not use any tools for this since it's just an explanation of my process. When building n8n workflows, I follow a systematic thought process:
+
+## My Workflow Protocol
+
+**1. Understand & Plan**
+- First, I clarify what trigger event starts the workflow (webhook, schedule, manual)
+- Identify all actions needed and their sequence
+- Map out data flow between nodes
+
+**2. Discover**
+- Search for specific node identifiers using `search_nodes`
+- Example: If you need an HTTP request, I'll search to find `n8n-nodes-base.httpRequest` (v4.2)
+
+**3. Learn**
+- Retrieve node documentation via `get_node_documentation`
+- Understand required parameters, auth methods, and expected data formats
+- This prevents errors before building
+
+**4. Construct**
+- Create nodes with mandatory properties: `id`, `name`, `type`, `typeVersion`, `position`, `parameters`
+- Build connections object linking nodes logically
+- Structure example: `{"SourceNode":{"main":[[{"node":"TargetNode","type":"main","index":0}]]}}`
+
+**5. Deploy**
+- Validate JSON structure first if uncertain
+- Use `create_workflow` or `update_workflow` to implement
+- Execute with `execute_workflow` to test
+
+**Example Flow:**
+If you ask "Create a workflow that fetches weather data daily," I would:
+- Search for "weather" and "schedule" nodes
+- Get documentation for HTTP request parameters
+- Build trigger → HTTP request → data processing nodes
+- Validate and deploy the complete workflow
+
+What workflow would you like me to build?

@@ -1,0 +1,10 @@
+{
+  "name": "flowgent-video-presentation",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts FlowgentPresentation out/flowgent-presentation-2min.mp4"
+  }
+}

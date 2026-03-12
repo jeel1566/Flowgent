@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Flowgent Backend",
-    description="AI-powered n8n workflow assistant using Google ADK",
+    description="AI-powered n8n workflow assistant using OpenRouter",
     version="2.0.0",
     lifespan=lifespan
 )

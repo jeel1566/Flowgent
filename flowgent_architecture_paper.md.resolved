@@ -1,0 +1,616 @@
+# Flowgent — Technical Architecture Paper
+
+**Version:** 2.0  
+**Date:** March 2026  
+**Classification:** Internal / Engineering Reference
+
+---
+
+## Table of Contents
+
+1. [Executive Summary](#1-executive-summary)
+2. [System Overview](#2-system-overview)
+3. [Architectural Principles](#3-architectural-principles)
+4. [Component Architecture](#4-component-architecture)
+   - 4.1 [Backend — FastAPI Application Server](#41-backend--fastapi-application-server)
+   - 4.2 [AI Agent Layer — Google ADK](#42-ai-agent-layer--google-adk)
+   - 4.3 [n8n Integration Layer](#43-n8n-integration-layer)
+   - 4.4 [Chrome Extension](#44-chrome-extension)
+5. [Data Flow & Sequence Diagrams](#5-data-flow--sequence-diagrams)
+6. [API Contract](#6-api-contract)
+7. [Security Architecture](#7-security-architecture)
+8. [Deployment & Infrastructure](#8-deployment--infrastructure)
+9. [Resilience & Fault-Tolerance](#9-resilience--fault-tolerance)
+10. [Performance Engineering](#10-performance-engineering)
+11. [Technical Debt & Roadmap](#11-technical-debt--roadmap)
+
+---
+
+## 1. Executive Summary
+
+**Flowgent** is a full-stack AI-native system that embeds an intelligent automation assistant directly into the n8n workflow editor via a Chrome Extension. The system is designed around a three-tier architecture:
+
+| Tier | Technology | Responsibility |
+|------|-----------|----------------|
+| **Presentation** | Chrome Extension (MV3) | UI surfaces: chat sidepanel, workflow dashboard, contextual node tooltips ("Information Hand") |
+| **Intelligence** | Python FastAPI + Google ADK Agent | LLM orchestration, tool dispatch, session management |
+| **Integration** | n8n MCP Protocol + Direct REST | Workflow CRUD, execution, node documentation retrieval |
+
+The primary technical challenge Flowgent solves is **bridging natural language intent → production-grade n8n workflow JSON**, through an agent that researches templates, reads node documentation, validates output, and only then creates the final artifact.
+
+---
+
+## 2. System Overview
+
+```mermaid
+graph TD
+    subgraph "Browser (Chrome Extension MV3)"
+        SP["Side Panel UI\n(chat.js / dashboard.js)"]
+        BG["Service Worker\n(background.js)"]
+        CS["Content Script\n(n8n-detector.js)"]
+        TT["Information Hand\n(tooltip.js)"]
+    end
+
+    subgraph "Backend (Python / FastAPI)"
+        API["REST API\n/api/*"]
+        AGT["AI Agent\n(Google ADK)"]
+        CTX["Request Context\n(n8n credentials)"]
+    end
+
+    subgraph "n8n Integration Layer"
+        MCP["N8nMcpClient\n(JSON-RPC over SSE)"]
+        DC["DirectN8nClient\n(REST API)"]
+    end
+
+    subgraph "External Services"
+        LLM["LLM Provider\n(OpenRouter / Azure / Gemini)"]
+        N8N["n8n Instance\n(cloud or self-hosted)"]
+        MCPAPI["n8n MCP Server\n(api.n8n-mcp.com)"]
+    end
+
+    SP -->|"HTTP POST /api/chat"| API
+    SP -->|"HTTP GET /api/workflows"| API
+    BG -->|"fetchNodeInfo"| API
+    CS -->|"postMessage"| BG
+    BG -->|"injectScript"| TT
+    TT -->|"postMessage request"| CS
+
+    API --> AGT
+    API --> MCP
+    API --> DC
+    AGT --> CTX
+    AGT --> MCP
+    AGT --> DC
+
+    AGT -->|"run_async (streaming)"| LLM
+    MCP -->|"JSON-RPC 2.0 / SSE"| MCPAPI
+    DC -->|"REST PUT/POST/GET"| N8N
+    MCPAPI -->|"proxies to"| N8N
+```
+
+---
+
+## 3. Architectural Principles
+
+### 3.1 Dual-Client Strategy
+Every n8n operation supports **two client paths** selected at runtime:
+
+- **Direct Client** — used when the user has configured `instance_url` + `api_key` in the extension settings. Lowest latency; calls n8n REST API directly.
+- **MCP Client** — used as the universal fallback. Communicates via JSON-RPC 2.0 over Server-Sent Events to the n8n MCP server, which proxies to any n8n instance.
+
+This separation decouples the agent's intelligence from credential management and provides a functioning "demo mode" without any n8n configuration.
+
+### 3.2 Research-Before-Create Agent Pattern
+The AI agent follows a mandatory 4-phase workflow for creation tasks:
+
+```
+THINK → RESEARCH → ASK → BUILD
+```
+
+1. **THINK** — parse the user's intent, identify required integrations
+2. **RESEARCH** — call [search_workflow_templates](file:///d:/flowgent/backend/agent/flowgent_agent.py#196-214), [get_workflow_template](file:///d:/flowgent/backend/agent/flowgent_agent.py#216-234), [get_node_documentation](file:///d:/flowgent/backend/agent/flowgent_agent.py#177-194) for each node
+3. **ASK** — if ambiguities remain, ask for clarification before generating
+4. **BUILD** — construct fully-populated node JSON, call [validate_workflow_json](file:///d:/flowgent/backend/agent/flowgent_agent.py#236-254), then [create_workflow](file:///d:/flowgent/backend/agent/flowgent_agent.py#323-391)
+
+### 3.3 Lazy Singleton Services
+The agent runner, ADK session service, and HTTP clients are all initialized on first use (lazy singletons) to minimize startup time and avoid import-time side effects from environment variable loading order.
+
+### 3.4 Defense-in-Depth Error Handling
+Every public endpoint wraps its logic with:
+1. Application-layer try/except → structured error log
+2. Specific error matching (401/403, timeout, rate limit) → meaningful HTTP status + user-facing message
+3. Fallback return values on non-critical failures (empty list vs. 500 crash)
+
+---
+
+## 4. Component Architecture
+
+### 4.1 Backend — FastAPI Application Server
+
+**Entry point:** [backend/main.py](file:///d:/flowgent/backend/main.py)
+
+```
+FastAPI App (v2.0.0)
+├── CORS Middleware     — permissive for Chrome extension compatibility
+├── Lifespan Manager   — MCP client init on startup, graceful close on shutdown
+├── /health            — liveness probe: returns MCP connection status
+├── /                  — API metadata
+└── Router (/api/*)    — all business endpoints (see §6)
+```
+
+**Key design decisions:**
+
+| Decision | Rationale |
+|----------|-----------|
+| `asynccontextmanager` lifespan | Replaces deprecated `startup`/`shutdown` events in FastAPI ≥0.93 |
+| `ALLOWED_ORIGINS=*` default | Chrome extensions require permissive CORS; controlled via env var |
+| `uvicorn[standard]` | Includes WebSocket and file-watch support for hot-reload in development |
+| `python:3.11-slim` Docker base | Minimal footprint; 3.11 required for `tomllib` stdlib and performance gains |
+
+---
+
+### 4.2 AI Agent Layer — Google ADK
+
+**Core module:** [backend/agent/flowgent_agent.py](file:///d:/flowgent/backend/agent/flowgent_agent.py)
+
+#### 4.2.1 Agent Configuration
+
+```python
+Agent(
+    name="flowgent",
+    model=get_agent_model(),       # runtime-configurable: Gemini / OpenRouter / Azure
+    instruction=SYSTEM_INSTRUCTION, # ~4 KB detailed prompt
+    tools=[11 async functions]
+)
+```
+
+#### 4.2.2 Tool Inventory
+
+| Category | Tool | Description |
+|----------|------|-------------|
+| **Research** | [get_workflow_recipe](file:///d:/flowgent/backend/agent/flowgent_agent.py#132-158) | Pre-built workflow skeletons (schedule/loop/webhook patterns) |
+| | [web_search](file:///d:/flowgent/backend/agent/flowgent_agent.py#99-128) | DuckDuckGo search for API docs, webhook formats, best practices |
+| | [search_workflow_templates](file:///d:/flowgent/backend/agent/flowgent_agent.py#196-214) | n8n community template search by keyword |
+| | [get_workflow_template](file:///d:/flowgent/backend/agent/flowgent_agent.py#216-234) | Full template JSON retrieval by ID |
+| | [search_nodes](file:///d:/flowgent/backend/agent/flowgent_agent.py#160-175) | Node type discovery by name/description |
+| | [get_node_documentation](file:///d:/flowgent/backend/agent/flowgent_agent.py#177-194) | Full parameter/typeVersion docs for a node type |
+| **Validation** | [validate_workflow_json](file:///d:/flowgent/backend/agent/flowgent_agent.py#236-254) | Pre-create structural validation via MCP |
+| **Management** | [list_workflows](file:///d:/flowgent/backend/agent/flowgent_agent.py#258-283) | List workflows from connected n8n |
+| | [get_workflow](file:///d:/flowgent/backend/api/routes.py#121-157) | Retrieve workflow by ID |
+| | [create_workflow](file:///d:/flowgent/backend/agent/flowgent_agent.py#323-391) | Create new workflow with nodes + connections |
+| | [update_workflow](file:///d:/flowgent/backend/api/routes.py#190-231) | Partial update of an existing workflow |
+| | [execute_workflow](file:///d:/flowgent/backend/agent/flowgent_agent.py#420-450) | Trigger workflow execution |
+
+#### 4.2.3 Multi-Provider LLM Support
+
+The agent uses **LiteLLM** as a provider-agnostic adapter:
+
+```
+LLM_MODEL=litellm/openrouter/deepseek/deepseek-chat  → OpenRouter (default, free tier)
+LLM_MODEL=gemini-2.0-flash                            → Google Gemini
+LLM_MODEL=azure/gpt-5.2                               → Azure OpenAI
+LLM_MODEL=litellm/openrouter/moonshot/kimi-k2-thinking → Kimi K2 Thinking (reasoning model)
+```
+
+Provider selection happens at import time (`agent/config.py`). API keys for each provider are injected into `os.environ` before ADK initializes its internal client.
+
+#### 4.2.4 Session Management
+
+Sessions are stored in an `InMemorySessionService` (ADK-provided). Each HTTP request carries an optional `session_id` in the chat message context, defaulting to `"default_session"`. Sessions persist for the lifetime of the process (no disk persistence by design — stateless deployment target).
+
+#### 4.2.5 Reasoning Model Post-Processing
+
+When `kimi-k2-thinking` or similar chain-of-thought models are active, the [_strip_reasoning()](file:///d:/flowgent/backend/agent/flowgent_agent.py#46-95) function post-processes responses to remove internal thought blocks before returning text to the user.
+
+---
+
+### 4.3 n8n Integration Layer
+
+#### 4.3.1 N8nMcpClient ([backend/n8n_mcp/n8n_client.py](file:///d:/flowgent/backend/n8n_mcp/n8n_client.py))
+
+Implements the **Model Context Protocol** (JSON-RPC 2.0) over HTTP with **Server-Sent Events** response streaming.
+
+```
+Request Flow:
+  1. Build JSON-RPC 2.0 envelope {jsonrpc, id, method, params}
+  2. POST to MCP URL with Authorization + Mcp-Session-Id headers
+  3. Parse SSE response stream → extract JSON data events
+  4. Handle JSON-RPC errors ({error.code, error.message})
+  5. Return result dict
+```
+
+**Singleton pattern:** `get_mcp_client()` returns a module-level instance, initialized lazily. The MCP session ID (provided by the server in response headers) is retained across calls to maintain protocol continuity.
+
+**Available MCP tools exposed:**
+
+```
+search_nodes      get_node          validate_workflow
+search_templates  get_template      get_tools_documentation
+list_workflows    get_workflow      create_workflow
+update_workflow   execute_workflow  list_executions
+```
+
+#### 4.3.2 DirectN8nClient ([backend/n8n_mcp/direct_client.py](file:///d:/flowgent/backend/n8n_mcp/direct_client.py))
+
+Thin async HTTP client wrapping the **n8n Public REST API** via `httpx`.
+
+**URL normalization:** The client strips trailing paths (e.g., `/workflow/123`, `/canvas`) from user-pasted URLs, extracting only the base URL — handling the common case where users paste a deep link from their browser.
+
+**Update merge strategy:** [update_workflow()](file:///d:/flowgent/backend/api/routes.py#190-231) fetches the current workflow first, then deep-merges the provided updates over the current state, preserving unmodified fields (including `settings`).
+
+```python
+# Merge pattern (direct_client.py)
+current = await self.get_workflow(workflow_id)
+merged = {**current, **updates}
+PUT /workflows/{id} with merged payload
+```
+
+---
+
+### 4.4 Chrome Extension
+
+Built to **Manifest V3** (Chrome's current standard), the extension has three distinct UI surfaces and a shared communication backbone.
+
+#### 4.4.1 Architecture Map
+
+```
+extension/
+├── manifest.json          — MV3 manifest; permissions, CSP, web_accessible_resources
+├── background.js          — Service worker: message router, node info cache, backend URL store
+├── content/
+│   ├── n8n-detector.js   — n8n page detection + Information Hand initialization
+│   ├── tooltip.js         — Tooltip render engine (injected into page context)
+│   └── styles.css         — Glassmorphism tooltip CSS
+├── lib/
+│   ├── api.js             — FlowgentAPI class: fetch wrapper for all backend calls
+│   └── storage.js         — Chrome storage helpers
+└── sidepanel/
+    ├── index.html         — Shell with tab navigation
+    ├── app.js             — Initialization, n8n config loading
+    ├── chat.js            — Chat interface (send/receive, session state)
+    ├── dashboard.js       — Workflow list, execution history
+    ├── settings.js        — Backend URL, n8n instance URL, API key management
+    └── styles.css         — Full dark-mode UI
+```
+
+#### 4.4.2 Information Hand Feature
+
+The "Information Hand" provides **contextual node documentation** as a glassmorphism tooltip on hover within the n8n editor.
+
+```mermaid
+sequenceDiagram
+    participant U as n8n Canvas
+    participant CS as content/n8n-detector.js
+    participant TT as content/tooltip.js
+    participant BG as background.js (SW)
+    participant BE as Backend /api/node-info
+
+    U->>CS: mouseenter on node element
+    CS->>TT: postMessage(FLOWGENT_FETCH_NODE_INFO, nodeType)
+    TT-->>TT: check in-memory cache
+    TT->>CS: postMessage(FLOWGENT_FETCH_NODE_INFO) [cache miss]
+    CS->>BG: chrome.runtime.sendMessage(fetchNodeInfo, nodeType)
+    BG-->>BG: check chrome.storage cache (24h TTL)
+    BG->>BE: GET /api/node-info/{nodeType}
+    BE-->>BG: {name, description, howItWorks, whatItDoes}
+    BG-->>CS: response
+    CS->>TT: postMessage(FLOWGENT_NODE_INFO_RESPONSE, data)
+    TT->>U: render tooltip at cursor position
+```
+
+**Detection strategy (n8n-detector.js):**
+- DOM selector probing for n8n-specific elements
+- URL pattern matching (`/workflow/`, `.n8n.io`, `.n8n.cloud`)
+- `MutationObserver` for SPA navigation (URL changes without page reload)
+- 3-second delayed re-check for slow-loading editors
+
+**Node type normalization:** A 20+ entry lookup table maps human-readable names (`"http"` → `"n8n-nodes-base.httpRequest"`, `"slack"` → `"n8n-nodes-base.slack"`) before querying the backend.
+
+#### 4.4.3 Service Worker Communication Model
+
+MV3 prohibits background scripts from using long-lived connections. The extension uses the standard `chrome.runtime.sendMessage` / `onMessage` async pattern:
+
+```
+Side Panel → background.js → Backend API → background.js → Side Panel
+Content Script → background.js → Chrome Storage / Backend API
+```
+
+The service worker acts solely as a **message router and cache manager** — no business logic lives there.
+
+---
+
+## 5. Data Flow & Sequence Diagrams
+
+### 5.1 Workflow Creation — Full Agent Flow
+
+```mermaid
+sequenceDiagram
+    participant U as User (Side Panel)
+    participant API as FastAPI /api/chat
+    participant AGT as ADK Agent
+    participant LLM as LLM Provider
+    participant MCP as n8n MCP Server
+    participant N8N as n8n Instance
+
+    U->>API: POST /api/chat {message, n8n_config, session_id}
+    API->>API: set_n8n_credentials(context)
+    API->>AGT: chat_with_agent(message, session_id)
+    AGT->>LLM: run_async(user_message)
+    LLM-->>AGT: tool_call: search_workflow_templates(query)
+    AGT->>MCP: search_templates(query)
+    MCP-->>AGT: [{id, name, description}]
+    AGT->>LLM: tool_result
+    LLM-->>AGT: tool_call: get_workflow_template(template_id)
+    AGT->>MCP: get_template(id, mode=full)
+    MCP-->>AGT: {nodes, connections, settings}
+    LLM-->>AGT: tool_call: get_node_documentation(node_type)
+    AGT->>MCP: get_node(type, mode=docs, detail=full)
+    MCP-->>AGT: {parameters, typeVersion, ...}
+    LLM-->>AGT: tool_call: validate_workflow_json(json)
+    AGT->>MCP: validate_workflow(workflow)
+    MCP-->>AGT: {valid: true}
+    LLM-->>AGT: tool_call: create_workflow(name, desc, nodes_json)
+    AGT->>N8N: POST /workflows (via DirectN8nClient)
+    N8N-->>AGT: {id, name, active}
+    LLM-->>AGT: final_response (text)
+    AGT-->>API: response string
+    API->>API: clear_n8n_credentials()
+    API-->>U: ChatResponse {response}
+```
+
+### 5.2 Dashboard Workflow List Load
+
+```mermaid
+sequenceDiagram
+    participant SP as Side Panel (dashboard.js)
+    participant BG as background.js
+    participant API as FastAPI /api/workflows
+    participant DC as DirectN8nClient
+
+    SP->>BG: getBackendUrl()
+    BG-->>SP: http://localhost:8000
+    SP->>API: GET /api/workflows\nHeaders: X-N8N-Instance-URL, X-N8N-API-Key
+    API->>DC: list_workflows()
+    DC->>DC: normalize base URL
+    DC->>N8N: GET /workflows
+    N8N-->>DC: [{id, name, active, createdAt}]
+    DC-->>API: workflow array
+    API-->>SP: [WorkflowListItem, ...]
+    SP->>SP: render workflow cards
+```
+
+---
+
+## 6. API Contract
+
+**Base URL:** `http://localhost:8000` (configurable)  
+**Auth:** Credentials passed per-request via JSON body (`n8n_config`) or custom headers for workflow/execution endpoints.
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Liveness check + MCP connection status |
+| `GET` | `/` | API metadata |
+| `POST` | `/api/chat` | Chat with the AI agent |
+| `GET` | `/api/workflows` | List all n8n workflows |
+| `GET` | `/api/workflows/{id}` | Get single workflow with full node/connection data |
+| `POST` | `/api/workflows` | Create a new workflow |
+| `PUT` | `/api/workflows/{id}` | Partial update of an existing workflow |
+| `POST` | `/api/execute` | Execute a workflow with optional input data |
+| `GET` | `/api/node-info/{type:path}` | Retrieve node documentation (cached) |
+| `GET` | `/api/executions` | Get execution history, optional `?workflow_id=` filter |
+
+### Key Request/Response Schemas
+
+**POST /api/chat**
+```json
+{
+  "message": "Create a workflow that sends Slack alerts for new GitHub stars",
+  "n8n_config": { "instance_url": "https://my.n8n.cloud", "api_key": "n8n_..." },
+  "context": { "session_id": "user-abc-123" }
+}
+```
+```json
+{
+  "response": "I created the workflow '...' (ID: 42). It uses...",
+  "workflow_data": null,
+  "action": null
+}
+```
+
+**Custom Headers (workflow/execution endpoints)**
+```
+X-N8N-Instance-URL: https://my.n8n.cloud
+X-N8N-API-Key: n8n_...
+```
+
+---
+
+## 7. Security Architecture
+
+### 7.1 Credential Handling
+
+| Location | Storage | Risk |
+|----------|---------|------|
+| Chrome Extension | `chrome.storage.local` (encrypted by Chrome) | Low — sandboxed per extension |
+| API Requests | In-memory only, per-request context | Low — never persisted to disk |
+| Environment ([backend/.env](file:///d:/flowgent/backend/.env)) | File on disk / container env vars | Medium — standard secret management required |
+
+### 7.2 Known Limitations
+
+> [!WARNING]
+> The `agent/context.py` module stores n8n credentials in a **module-level global variable**, not in a request-scoped or thread-local store. Under concurrent request load, credentials from one request could leak into another. This is safe in the current single-threaded async I/O model but must be addressed before multi-worker deployment.
+
+**Mitigation path:** Replace the global with a `contextvars.ContextVar` for proper async request isolation.
+
+### 7.3 CORS Policy
+
+The backend defaults to `ALLOWED_ORIGINS=*` (required for Chrome extension compatibility), configurable via environment variable for production lockdown.
+
+### 7.4 Input Validation
+
+All incoming request bodies are validated by **Pydantic v2** before reaching business logic. JSON payloads passed to [create_workflow](file:///d:/flowgent/backend/agent/flowgent_agent.py#323-391) / [update_workflow](file:///d:/flowgent/backend/api/routes.py#190-231) are parsed and re-serialized, preventing injection of malformed structures into the n8n API.
+
+---
+
+## 8. Deployment & Infrastructure
+
+### 8.1 Local Development
+
+```
+Backend:  uvicorn main:app --reload --port 8000
+Extension: Chrome → Load Unpacked → extension/
+n8n:      Docker or n8n.cloud (configured via settings panel)
+```
+
+### 8.2 Cloud Deployment (Google Cloud Run)
+
+```dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+RUN apt-get install -y gcc
+COPY requirements.txt .
+RUN pip install -r requirements.txt   # layer-cached
+COPY . .
+ENV PYTHONUNBUFFERED=1 PORT=8080
+EXPOSE 8080
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port $PORT"]
+```
+
+Cloud Run receives `PORT` as an environment variable and the container honours it. The deployment is fully stateless — any restart or scale-out event produces a fresh process with empty session memory.
+
+### 8.3 Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `LLM_MODEL` | Yes | LiteLLM model string (e.g. `litellm/openrouter/deepseek/deepseek-chat`) |
+| `OPENROUTER_API_KEY` | If OpenRouter | API key from openrouter.ai |
+| `GOOGLE_GENAI_API_KEY` | If Gemini | Key from Google AI Studio |
+| `AZURE_AI_API_KEY` / `AZURE_API_BASE` | If Azure | Azure AI endpoint credentials |
+| `FALLBACK_LLM_MODEL` | Optional | Secondary model on rate limit |
+| `N8N_MCP_URL` | Yes | MCP server endpoint |
+| `N8N_MCP_API_KEY` | Yes | MCP server API key |
+| `PORT` / `HOST` | Optional | Server bind config (default: 8000 / 0.0.0.0) |
+| `ALLOWED_ORIGINS` | Optional | CORS origins (default: `*`) |
+
+---
+
+## 9. Resilience & Fault-Tolerance
+
+### 9.1 Rate Limit Retry with Exponential Backoff
+
+The [chat_with_agent](file:///d:/flowgent/backend/agent/flowgent_agent.py#540-744) function retries LLM calls up to **3 times** on rate limit errors (HTTP 429 / 503 / "request queue is full"):
+
+```python
+retry_delays = [5, 15, 30]  # seconds
+for attempt in range(3):
+    try:
+        await run_agent(...)
+        break
+    except RateLimitError:
+        await asyncio.sleep(retry_delays[attempt])
+```
+
+### 9.2 Fallback Model
+
+If all retries are exhausted and a `FALLBACK_LLM_MODEL` is configured, the system instantiates a temporary agent with the fallback model and completes the request transparently, notifying the user with a banner message.
+
+### 9.3 Timeout Handling
+
+The [list_workflows](file:///d:/flowgent/backend/agent/flowgent_agent.py#258-283) and [list_executions](file:///d:/flowgent/backend/api/routes.py#373-407) endpoints return **empty lists** on `ReadTimeout` / `ConnectTimeout` / `ConnectError` instead of propagating a 500 error — preventing the extension dashboard from crashing when the n8n instance is temporarily unreachable.
+
+### 9.4 Auto-Connect Fallback
+
+If the agent calls [create_workflow](file:///d:/flowgent/backend/agent/flowgent_agent.py#323-391) without providing explicit node connections (a model error), the [_auto_connect_nodes()](file:///d:/flowgent/backend/agent/flowgent_agent.py#306-321) helper builds a linear chain (`node[0] → node[1] → node[2] → ...`) as a safe fallback, ensuring the workflow is at minimum structurally valid.
+
+### 9.5 Node Info Caching (Two-Layer)
+
+| Layer | Location | TTL |
+|-------|----------|-----|
+| Process memory | `NODE_INFO_CACHE` dict in [routes.py](file:///d:/flowgent/backend/api/routes.py) | Process lifetime |
+| Chrome storage | [background.js](file:///d:/flowgent/extension/background.js) cache | 24 hours |
+
+Cache cleanup runs on a 6-hour interval in the service worker.
+
+---
+
+## 10. Performance Engineering
+
+| Concern | Solution |
+|---------|---------|
+| **Cold start latency** | Lazy singleton initialization — MCP client, ADK runner, and agent are created on first use, not at import time |
+| **Node info latency** | Two-layer cache (process memory + Chrome storage with 24h TTL) eliminates repeated MCP round trips for the same node type |
+| **Workflow list latency** | Direct client path bypasses MCP entirely, saving one round trip to the external MCP server |
+| **Agent response streaming** | `runner.run_async()` streams events; only final-response events are collected, ignoring intermediate tool-call events |
+| **Docker layer caching** | [requirements.txt](file:///d:/flowgent/backend/requirements.txt) copied and installed before application code, maximizing layer cache hits on re-builds |
+
+---
+
+## 11. Technical Debt & Roadmap
+
+### 11.1 Current Technical Debt
+
+| Item | Severity | Description |
+|------|----------|-------------|
+| Global credential store | **High** | [context.py](file:///d:/flowgent/backend/test_agent_context.py) uses a module-level dict — not safe for multi-worker deployments |
+| In-memory sessions | **Medium** | `InMemorySessionService` loses all sessions on restart; multi-instance deployments lose session continuity |
+| No authentication on backend | **Medium** | Any client on the network can call `/api/chat`. No request authentication or API key gate |
+| Mutable singleton runner | **Low** | [reset_agent()](file:///d:/flowgent/backend/agent/flowgent_agent.py#497-503) is not thread-/coroutine-safe; concurrent calls during reset could produce inconsistent state |
+
+### 11.2 Recommended Architecture Improvements
+
+1. **Request-scoped credentials:** Replace [context.py](file:///d:/flowgent/backend/test_agent_context.py) global with `contextvars.ContextVar` for full async safety.
+2. **Persistent session storage:** Add Redis-backed `SessionService` for multi-replica deployments.
+3. **Backend authentication:** Add API key middleware (`X-Flowgent-Key` header) validated against an environment variable.
+4. **Streaming chat responses:** Implement SSE endpoint (`/api/chat/stream`) to stream agent tokens to the sidepanel as they arrive, reducing perceived latency on complex workflows.
+5. **Structured workflow output:** Move from untyped `nodes_json` string to a `WorkflowDefinition` Pydantic model for stronger agent output validation.
+
+### 11.3 Feature Roadmap
+
+| Priority | Feature | Technical Approach |
+|----------|---------|-------------------|
+| P0 | Streaming chat UI | FastAPI `StreamingResponse` + `EventSource` in `chat.js` |
+| P1 | Workflow diff view | Compare [get_workflow](file:///d:/flowgent/backend/api/routes.py#121-157) before/after on update operations |
+| P1 | Multi-session support | Persist session IDs in Chrome storage, pass to backend |
+| P2 | Offline node documentation | Bundle common node docs in extension for zero-latency tooltips |
+| P2 | Telemetry / observability | OpenTelemetry traces on agent tool calls + LLM latency |
+| P3 | Workflow testing harness | Simulate workflow execution with mock data before deploying |
+
+---
+
+## Appendix A: Technology Stack
+
+| Layer | Technology | Version |
+|-------|-----------|---------|
+| Web framework | FastAPI | ≥0.115 |
+| ASGI server | uvicorn[standard] | ≥0.30 |
+| AI agent framework | Google ADK (`google-adk`) | ≥0.1 |
+| LLM SDK | google-genai | ≥0.1 |
+| LLM adapter | LiteLLM | latest |
+| Data validation | Pydantic v2 | ≥2.7 |
+| HTTP client | httpx (async) | ≥0.27 |
+| Web search | duckduckgo-search | latest |
+| Container base | python:3.11-slim | stable |
+| Chrome Extension | Manifest V3 | — |
+| Browser storage | `chrome.storage.local` | — |
+
+## Appendix B: File Reference
+
+| File | LOC | Purpose |
+|------|-----|---------|
+| [backend/main.py](file:///d:/flowgent/backend/main.py) | 93 | FastAPI app, CORS, lifespan, health |
+| [backend/agent/config.py](file:///d:/flowgent/backend/agent/config.py) | 113 | System prompt, model config, API key resolver |
+| [backend/agent/context.py](file:///d:/flowgent/backend/agent/context.py) | 31 | Per-request credential store |
+| [backend/agent/flowgent_agent.py](file:///d:/flowgent/backend/agent/flowgent_agent.py) | 744 | All agent tools + ADK runner setup |
+| [backend/agent/workflow_recipes.py](file:///d:/flowgent/backend/agent/workflow_recipes.py) | — | Pre-built workflow skeleton library |
+| [backend/api/routes.py](file:///d:/flowgent/backend/api/routes.py) | 407 | All REST endpoints |
+| [backend/models/schemas.py](file:///d:/flowgent/backend/models/schemas.py) | 96 | Pydantic request/response models |
+| [backend/n8n_mcp/n8n_client.py](file:///d:/flowgent/backend/n8n_mcp/n8n_client.py) | 323 | MCP JSON-RPC client |
+| [backend/n8n_mcp/direct_client.py](file:///d:/flowgent/backend/n8n_mcp/direct_client.py) | 156 | Direct n8n REST client |
+| [extension/background.js](file:///d:/flowgent/extension/background.js) | 135 | MV3 service worker |
+| [extension/content/n8n-detector.js](file:///d:/flowgent/extension/content/n8n-detector.js) | 354 | n8n detection + Information Hand orchestration |
+| [extension/content/tooltip.js](file:///d:/flowgent/extension/content/tooltip.js) | 211 | Tooltip render engine |
+| [extension/sidepanel/chat.js](file:///d:/flowgent/extension/sidepanel/chat.js) | — | Chat UI |
+| [extension/sidepanel/dashboard.js](file:///d:/flowgent/extension/sidepanel/dashboard.js) | — | Workflow/execution dashboard |
+| [extension/lib/api.js](file:///d:/flowgent/extension/lib/api.js) | 222 | FlowgentAPI HTTP client wrapper |
