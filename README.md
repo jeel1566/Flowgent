@@ -1,222 +1,286 @@
-# Flowgent - AI-Powered Assistant for n8n Workflows
+# Flowgent — AI-Powered n8n Workflow Automation
 
-**An intelligent browser extension that helps you build, debug, and optimize n8n automation workflows using Google's Gemini AI.**
+**A Chrome extension + FastAPI backend that lets you build, edit, debug, and execute production-grade n8n workflows using natural language.**
 
 ![Flowgent Icon](extension/assets/icon128.png)
 
+---
+
 ## ✨ Features
 
-### 🤖 AI Chat Assistant
-- **Create workflows**: "Create a workflow that sends daily Slack notifications"
-- **Edit workflows**: "Add an If node to workflow #123" ✨ **NEW**
-- **Fix workflows**: "Fix the broken connection in workflow #456" ✨ **NEW**
-- Debug and analyze workflow JSON
-- Get instant answers about n8n nodes and best practices
-- Powered by **Google Gemini 2.0 Flash** with n8n expertise
-- Full workflow lifecycle management (create, read, update, execute)
+### 🤖 AI Chat Assistant (Production-Grade)
+The agent follows a **5-phase protocol** for every workflow request — it doesn't just generate JSON, it thinks, researches, and builds real automations:
+
+| Phase | What It Does |
+|-------|-------------|
+| 🧠 **Think** | Analyzes the business goal, trigger, steps, and services involved |
+| 📖 **Research Templates** | Searches n8n community templates for real working examples |
+| 🔍 **Research Nodes & Docs** | Reads official node documentation for every node it uses |
+| 💬 **Ask & Recommend** | Presents the workflow plan and asks clarifying questions |
+| 🔨 **Build** | Constructs a validated, production-ready workflow |
+
+**What you can say:**
+- `"Create a workflow that syncs new Shopify orders to Google Sheets"`
+- `"Build a Slack bot that replies to messages using an LLM"`
+- `"Add an If node to workflow #123 to handle errors"`
+- `"Fix the broken connection in workflow #456"`
+- `"Rename workflow #789 to 'Daily Reports'"`
+
+### 🌐 Web Search
+- Agent can search the web to find API docs, webhook formats, and integration patterns
+- Powered by DuckDuckGo (no API key required)
 
 ### ℹ️ Information Hand
-- Hover over any n8n node to see instant documentation
-- Displays:
-  - Node description and parameters
-  - Common use cases
-  - Best practices
-  - Example configurations
-- Works with custom nodes too!
+- Hover over any n8n node for instant documentation
+- Shows: description, common use cases, best practices, example configurations
+- Auto-positions tooltip, caches results, works with custom nodes
 
 ### 📊 Dashboard
-- View all your workflows in one place
-- Execution history and status
-- Quick workflow actions (run, view details)
-- Test workflows with custom input data
+- View all your n8n workflows with status, node count, and timestamps
+- Execution history (last 10 runs with status and timing)
+- Execute workflows with custom input data
+- Quick workflow actions without leaving Chrome
+
+---
 
 ## 🏗️ Architecture
 
 ```
 Flowgent/
-├── backend/          # FastAPI + Google Agent SDK
-│   ├── agent/        # Gemini AI agent configuration
-│   ├── api/          # REST API endpoints
-│   ├── mcp/          # n8n MCP client
-│   └── models/       # Pydantic schemas
-└── extension/        # Chrome Extension (Manifest V3)
-    ├── sidepanel/    # Chat + Dashboard UI
-    ├── content/      # Information Hand tooltips
-    └── lib/          # Shared utilities
+├── backend/                  # FastAPI + Google Agent Development Kit
+│   ├── agent/
+│   │   ├── flowgent_agent.py # Agent tools (11 tools) + ADK runner
+│   │   └── config.py         # Multi-LLM config + system prompt
+│   ├── api/                  # REST API routes
+│   ├── n8n_mcp/              # n8n MCP + direct HTTP client
+│   └── models/               # Pydantic schemas
+└── extension/                # Chrome Extension (Manifest V3)
+    ├── sidepanel/            # Chat + Dashboard UI
+    ├── content/              # Information Hand tooltips
+    └── lib/                  # Shared utilities
 ```
+
+---
 
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Python 3.11+
-- Chrome browser
-- Google Gemini API key
-- n8n instance (local or cloud)
+- **Python 3.11+**
+- **Chrome browser**
+- **n8n instance** (local or cloud)
+- An LLM API key (see [LLM Options](#-llm-options) below)
 
-### Backend Setup
+### 1. Backend Setup
 
-1. **Install dependencies:**
 ```bash
 cd backend
 pip install -r requirements.txt
 ```
 
-2. **Configure environment:**
+Copy and configure the environment file:
 ```bash
 cp .env.example .env
-# Edit .env and add:
-# - GEMINI_API_KEY=your-gemini-api-key
-# - N8N_MCP_SERVER_URL=http://your-mcp-server-url
 ```
 
-3. **Run the backend:**
+Edit `.env` with your chosen LLM and n8n settings (see next section), then start:
 ```bash
 python main.py
 # Or with uvicorn:
 uvicorn main:app --reload --port 8000
 ```
 
-The backend will be available at `http://localhost:8000`
+The backend will be available at `http://localhost:8000`.
 
-### Extension Setup
+### 2. Chrome Extension Setup
 
-1. **Open Chrome Extensions:**
-   - Navigate to `chrome://extensions/`
-   - Enable "Developer mode" (toggle in top right)
+1. Go to `chrome://extensions/` and enable **Developer mode**
+2. Click **Load unpacked** and select the `extension/` folder
+3. Click the Flowgent icon → **Settings tab**
+4. Enter your backend URL (`http://localhost:8000`) and your n8n instance URL + API key
+5. Click **Save Settings** and **Test Connection**
+6. Navigate to your n8n instance and open the side panel ✅
 
-2. **Load the extension:**
-   - Click "Load unpacked"
-   - Select the `extension` folder from this repository
+---
 
-3. **Configure backend URL:**
-   - Click the Flowgent icon in Chrome toolbar
-   - Go to Settings tab
-   - Enter backend URL: `http://localhost:8000`
-   - Click "Save Settings" and "Test Connection"
+## 🤖 LLM Options
 
-4. **Start using Flowgent:**
-   - Navigate to your n8n instance
-   - Open the Flowgent side panel
-   - Start chatting with the AI! 🎉
+Flowgent supports multiple LLM providers. Set `LLM_MODEL` in `backend/.env`:
+
+| Provider | `LLM_MODEL` value | Key variable |
+|----------|-------------------|--------------|
+| **OpenRouter** (default) | `openrouter/deepseek/deepseek-chat` | `OPENROUTER_API_KEY` |
+| **Google Gemini** | `gemini-2.0-flash` | `GOOGLE_GENAI_API_KEY` |
+| **Azure AI** | `azure/<your-deployment>` | `AZURE_AI_API_KEY` + `AZURE_API_BASE` |
+| Any OpenRouter model | `openrouter/<provider>/<model>` | `OPENROUTER_API_KEY` |
+
+**Get free API keys:**
+- OpenRouter (free tier): https://openrouter.ai/keys
+- Google Gemini: https://aistudio.google.com/apikey
+
+**Example `.env` (OpenRouter — default):**
+```env
+LLM_MODEL=openrouter/deepseek/deepseek-chat
+OPENROUTER_API_KEY=sk-or-...
+
+N8N_BASE_URL=http://localhost:5678
+N8N_API_KEY=your-n8n-api-key
+```
+
+**Example `.env` (Google Gemini):**
+```env
+LLM_MODEL=gemini-2.0-flash
+GOOGLE_GENAI_API_KEY=AIza...
+
+N8N_BASE_URL=http://localhost:5678
+N8N_API_KEY=your-n8n-api-key
+```
+
+---
+
+## 📚 API Reference
+
+### Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/health` | Health check and connection status |
+| `POST` | `/api/chat` | Chat with the AI agent |
+| `GET` | `/api/workflows` | List all workflows |
+| `POST` | `/api/workflows` | Create a new workflow |
+| `GET` | `/api/workflows/{id}` | Get workflow details |
+| `PUT` | `/api/workflows/{id}` | Update an existing workflow |
+| `POST` | `/api/execute` | Execute a workflow |
+| `GET` | `/api/node-info/{type}` | Get node documentation |
+| `GET` | `/api/executions` | Get execution history |
+
+### Example: Chat Request
+```json
+POST /api/chat
+{
+  "message": "Create a workflow that monitors GitHub issues and posts to Slack",
+  "context": { "currentPage": "https://your-n8n-instance.com" }
+}
+```
+
+---
+
+## 🛠️ Tech Stack
+
+**Backend**
+- [FastAPI](https://fastapi.tiangolo.com/) — async Python web framework
+- [Google Agent Development Kit (ADK)](https://google.github.io/adk-docs/) — agentic AI runtime
+- [LiteLLM](https://litellm.ai/) — unified LLM interface (OpenRouter, Azure, etc.)
+- [Google GenAI SDK](https://ai.google.dev/) — Gemini model support
+- [duckduckgo-search](https://pypi.org/project/duckduckgo-search/) — web search for the agent
+- [httpx](https://www.python-httpx.org/) — async HTTP client for n8n API calls
+- [Pydantic v2](https://docs.pydantic.dev/) — request/response validation
+
+**Frontend (Chrome Extension)**
+- Manifest V3
+- Vanilla JavaScript — no build step required
+- Modern CSS — glassmorphism design, dark mode
+
+**Integration**
+- [n8n MCP Server](https://www.npmjs.com/package/@n8n/n8n-mcp) — official n8n Model Context Protocol server for node docs, templates, and workflow management
+- Direct n8n REST API — fallback for workflow CRUD and execution
+
+---
+
+## 🧠 Agent Tools (11 total)
+
+| Tool | Purpose |
+|------|---------|
+| `web_search` | Research APIs, webhook formats, integration patterns |
+| `search_workflow_templates` | Find community templates by keyword |
+| `get_workflow_template` | Fetch full template configuration |
+| `search_nodes` | Find exact node type identifiers |
+| `get_node_documentation` | Get node parameters, versions, and examples |
+| `validate_workflow_json` | Validate workflow structure before deploying |
+| `list_workflows` | List all workflows in connected n8n instance |
+| `get_workflow` | Fetch a specific workflow by ID |
+| `create_workflow` | Deploy a new workflow |
+| `update_workflow` | Edit/fix an existing workflow |
+| `execute_workflow` | Run a workflow with optional input data |
+
+---
 
 ## 🧪 Testing
 
-### Test the Backend
 ```bash
-# Check health
+# Health check
 curl http://localhost:8000/health
 
-# Test chat endpoint
+# Chat
 curl -X POST http://localhost:8000/api/chat \
   -H "Content-Type: application/json" \
-  -d '{"message": "What is n8n?"}'
+  -d '{"message": "List my workflows"}'
+
+# Run backend tests
+cd backend
+python test_endpoints.py
 ```
 
-### Test the Extension
-1. Load the extension in Chrome
-2. Open your n8n instance
-3. Test Chat: Ask "Create a simple HTTP request workflow"
-4. Test Information Hand: Hover over nodes to see tooltips
-5. Test Dashboard: View your workflows list
+---
 
 ## 🌐 Deployment
 
-### Deploy Backend to Google Cloud Run
+### Google Cloud Run
 
-1. **Build and deploy:**
 ```bash
 cd backend
 gcloud run deploy flowgent-backend \
   --source . \
   --region us-central1 \
   --allow-unauthenticated \
-  --set-env-vars GEMINI_API_KEY=your-key,N8N_MCP_SERVER_URL=your-mcp-url
+  --set-env-vars LLM_MODEL=openrouter/deepseek/deepseek-chat,OPENROUTER_API_KEY=your-key
 ```
 
-2. **Update extension settings:**
-   - Set backend URL to your Cloud Run URL
-   - Test connection
+After deploying, update the backend URL in the Chrome extension settings to your Cloud Run URL.
 
-### Using Cloud Build (CI/CD)
-```bash
-gcloud builds submit --config cloudbuild.yaml
-```
+---
 
-## 📚 API Documentation
+## 💡 Tips
 
-### Endpoints
+- **Be specific:** `"Create a workflow that sends a Slack message when a new row is added to Google Sheets"` works better than `"automate Slack"`
+- **Reference workflows by ID:** `"Edit workflow #123 to add error handling"`
+- **Information Hand:** Hover slowly on nodes — there's a 100ms delay to prevent flickering
+- **Check the connection indicator:** The header shows backend and n8n connection status
+- **Web search:** Ask the agent to look up APIs — e.g., `"Research the Stripe webhook format and build a workflow"`
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check and status |
-| `/api/chat` | POST | Chat with AI assistant |
-| `/api/workflows` | GET | List all workflows |
-| `/api/workflows` | POST | Create a new workflow |
-| `/api/workflows/{id}` | GET | Get workflow details |
-| `/api/workflows/{id}` | PUT | **Update workflow** ✨ **NEW** |
-| `/api/execute` | POST | Execute a workflow |
-| `/api/node-info/{type}` | GET | Get node information |
-| `/api/executions` | GET | Get execution history |
+---
 
-### Example: Chat Request
-```json
-POST /api/chat
-{
-  "message": "Create a workflow to fetch GitHub issues",
-  "context": {
-    "currentPage": "n8n.io/workflow/123"
-  }
-}
-```
+## ❓ Troubleshooting
 
-## 🛠️ Tech Stack
+**Extension not loading?**
+- Enable Developer mode in `chrome://extensions/`
+- Check Chrome DevTools console for errors
 
-**Backend:**
-- FastAPI - Modern Python web framework
-- Google GenAI SDK - Gemini 2.0 Flash integration
-- Google Agent Development Kit - Agentic AI capabilities
-- Pydantic - Data validation
-- httpx - Async HTTP client
+**Backend connection failed?**
+- Verify the backend is running: `curl http://localhost:8000/health`
+- Confirm the URL in extension Settings matches your backend
 
-**Frontend:**
-- Chrome Extension Manifest V3
-- Vanilla JavaScript (no frameworks)
-- Modern CSS with dark mode
-- Glassmorphism UI design
+**n8n connection failed?**
+- Make sure your n8n instance URL and API key are set in Settings
+- For local n8n: use `http://localhost:5678`
+- For cloud n8n: use your full instance URL (e.g., `https://your-team.app.n8n.cloud`)
 
-**Integration:**
-- n8n MCP (Model Context Protocol) - Direct n8n access
-- Google Cloud Run - Serverless deployment
+**AI not responding / API key error?**
+- Check `backend/.env` has the correct key variable for your chosen LLM
+- See [LLM Options](#-llm-options) for the correct variable names
+- Restart the backend after editing `.env`
 
-## 🤝 Development
+**Information Hand not showing?**
+- Refresh the n8n page after loading the extension
+- Check you're on an n8n workflow editor page
+- Open DevTools and look for errors in the Console
 
-### Project Structure
-- `backend/main.py` - FastAPI application
-- `backend/agent/flowgent_agent.py` - AI agent logic
-- `backend/mcp/n8n_client.py` - n8n MCP wrapper
-- `extension/manifest.json` - Extension configuration
-- `extension/sidepanel/` - Chat & dashboard UI
-- `extension/content/` - Information Hand scripts
-
-### Adding New Features
-
-1. **Backend:** Add endpoints in `backend/api/routes.py`
-2. **Agent:** Extend tools in `backend/agent/flowgent_agent.py`
-3. **Extension:** Add UI in `extension/sidepanel/`
-4. **Tooltips:** Modify `extension/content/tooltip.js`
-
-## 🎯 Roadmap
-
-- [ ] Multi-language support
-- [ ] Workflow templates library
-- [ ] Advanced workflow analytics
-- [ ] Team collaboration features
-- [ ] Chrome Web Store publication
-- [ ] Firefox extension support
+---
 
 ## 📄 License
 
-MIT License - see LICENSE file
+MIT License
+
+---
 
 ## 👥 Team
 
@@ -224,34 +288,4 @@ Built for **Agentic+ Product Hackathon** by Team Flowgent
 
 ---
 
-## 💡 Tips
-
-- **Chat works best with specific requests:** Instead of "help me", try "create a workflow that sends emails from Google Sheets"
-- **Hover slowly on nodes:** Information Hand has a small delay to avoid flickering
-- **Check connection status:** The header shows if backend and MCP are connected
-- **Use Dashboard for quick actions:** View and execute workflows without leaving Chrome
-
-## ❓ Troubleshooting
-
-**Extension not loading?**
-- Ensure Developer mode is enabled in `chrome://extensions/`
-- Check for errors in Chrome DevTools console
-
-**Backend connection failed?**
-- Verify backend is running: `curl http://localhost:8000/health`
-- Check firewall settings
-- Confirm backend URL in extension settings
-
-**Information Hand not showing?**
-- Refresh the n8n page after loading extension
-- Check if you're on a supported n8n page
-- Open DevTools and check for errors
-
-**AI not responding?**
-- Verify GEMINI_API_KEY is set correctly
-- Check backend logs for errors
-- Ensure you have API quota remaining
-
----
-
-**Happy automating with Flowgent! 🚀✨**
+**Happy automating! 🚀**

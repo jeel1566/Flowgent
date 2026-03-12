@@ -279,10 +279,25 @@ class N8nMcpClient:
         return await self.call_tool("n8n_test_workflow", args)
 
     async def get_node_info(self, node_type: str) -> Optional[Dict[str, Any]]:
-        """Get node info (wrapper for get_node)."""
+        """Get rich node info by combining structured JSON + docs markdown."""
         try:
-            return await self.get_node(node_type, mode="docs")
-        except Exception:
+            # mode="info" returns structured JSON with displayName, properties, etc.
+            info = await self.get_node(node_type, mode="info", detail="standard")
+            result = info if isinstance(info, dict) else {}
+
+            # mode="docs" returns human-readable markdown
+            try:
+                docs = await self.get_node(node_type, mode="docs", detail="standard")
+                if isinstance(docs, dict) and "text" in docs:
+                    result["docsMarkdown"] = docs["text"]
+                elif isinstance(docs, str):
+                    result["docsMarkdown"] = docs
+            except Exception as docs_err:
+                logger.debug(f"docs mode failed for {node_type}: {docs_err}")
+
+            return result if result else None
+        except Exception as e:
+            logger.warning(f"get_node_info failed for {node_type}: {e}")
             return None
 
     async def list_executions(self, workflow_id: Optional[str] = None) -> List[Dict[str, Any]]:
